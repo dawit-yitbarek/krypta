@@ -1,0 +1,154 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Font Families */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Terminal color palette */
+  --terminal-bg: #09090b;
+  --terminal-surface: #111113;
+  --terminal-panel: #18181b;
+  --terminal-border: #27272a;
+  --terminal-muted: #3f3f46;
+  --terminal-text: #e4e4e7;
+  --terminal-text-dim: #71717a;
+  --terminal-text-bright: #fafafa;
+  --terminal-up: #10b981;
+  --terminal-up-dim: rgba(16, 185, 129, 0.15);
+  --terminal-down: #f43f5e;
+  --terminal-down-dim: rgba(244, 63, 94, 0.15);
+  --terminal-accent: #3b82f6;
+
+  /* shadcn tokens — forced dark terminal */
+  --background: oklch(0.1 0 0);
+  --foreground: oklch(0.92 0 0);
+  --card: oklch(0.12 0 0);
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.14 0 0);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.65 0.18 162);
+  --primary-foreground: oklch(0.1 0 0);
+  --secondary: oklch(0.18 0 0);
+  --secondary-foreground: oklch(0.92 0 0);
+  --muted: oklch(0.18 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.18 0 0);
+  --accent-foreground: oklch(0.92 0 0);
+  --destructive: oklch(52.132% 0.20354 19.28);
+  --destructive-foreground: oklch(0.92 0 0);
+  --border: oklch(0.22 0 0);
+  --input: oklch(0.22 0 0);
+  --ring: oklch(0.65 0.18 162);
+  --radius: 0.25rem;
+}
+
+@layer utilities {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+}
+
+@theme inline {
+  --font-sans: var(--font-sans, "Inter", "Inter Fallback");
+  --font-mono: var(--font-mono, "JetBrains Mono", "JetBrains Mono Fallback");
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  /* Terminal-specific tokens */
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-surface: var(--terminal-surface);
+  --color-terminal-panel: var(--terminal-panel);
+  --color-terminal-border: var(--terminal-border);
+  --color-terminal-muted: var(--terminal-muted);
+  --color-terminal-text: var(--terminal-text);
+  --color-terminal-text-dim: var(--terminal-text-dim);
+  --color-terminal-text-bright: var(--terminal-text-bright);
+  --color-terminal-up: var(--terminal-up);
+  --color-terminal-up-dim: var(--terminal-up-dim);
+  --color-terminal-down: var(--terminal-down);
+  --color-terminal-down-dim: var(--terminal-down-dim);
+  --color-terminal-accent: var(--terminal-accent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-[#09090b] text-[#e4e4e7] font-sans antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #18181b;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #52525b;
+  }
+}
+
+/* Price flash animations */
+@keyframes flash-up {
+  0% {
+    background-color: rgba(16, 185, 129, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes flash-down {
+  0% {
+    background-color: rgba(244, 63, 94, 0.25);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.flash-up {
+  animation: flash-up 0.5s ease-out;
+}
+
+.flash-down {
+  animation: flash-down 0.5s ease-out;
+}

@@ -1,0 +1,1 @@
+export type streamType = 'unknown' | 'depth' | 'trades' | 'kline' | 'ticker';

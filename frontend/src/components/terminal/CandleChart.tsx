@@ -159,7 +159,7 @@ export function CandleChart({ candles }: CandleChartProps) {
 
             candleSeriesRef.current.setData(formattedCandles)
             volumeSeriesRef.current.setData(formattedVolume)
-            chartRef.current?.timeScale().fitContent()
+            // chartRef.current?.timeScale().fitContent()
         } else {
             // Real-Time Incremental Tick Update
             const latest = candles[candles.length - 1]

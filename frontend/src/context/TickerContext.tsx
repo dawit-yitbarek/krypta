@@ -1,13 +1,14 @@
 import React, { createContext, useContext, useCallback, useEffect, useState, useMemo } from "react"
-import type { CoinData, connectionStatus } from "@/types"
+import type { CoinData } from "@/types"
 import { api } from "@/components/api"
 import { useBinanceSocket } from "@/context/BinanceSocketContext"
+import { useIsMobile } from "@/hooks/use-mobile"
+
 
 interface TickerContextType {
     tickers: CoinData[]
     coinMap: Record<string, CoinData>
     loadingCoins: boolean
-    connectionStatus: connectionStatus
     errorLoadingCoins: boolean
     sidebarCollapsed: boolean
     setSidebarCollapsed: (collapsed: boolean) => void
@@ -17,13 +18,13 @@ interface TickerContextType {
 const TickerContext = createContext<TickerContextType | null>(null)
 
 export const TickerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { socket } = useBinanceSocket()
+    const { sendMessage, socket } = useBinanceSocket()
 
     const [coinMap, setCoinMap] = useState<Record<string, CoinData>>({})
     const [loadingCoins, setLoadingCoins] = useState<boolean>(true)
     const [errorLoadingCoins, setErrorLoadingCoins] = useState<boolean>(false)
     const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(true)
-    const [connectionStatus, setConnectionStatus] = useState<connectionStatus>("connecting")
+    const isMobile = useIsMobile()
 
     // 1. Single API Fetch
     const fetchCoins = useCallback(async () => {
@@ -38,11 +39,13 @@ export const TickerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 initialMap[coin.symbol] = coin
             })
             setCoinMap(initialMap)
-            setSidebarCollapsed(false)
         } catch (error) {
             console.error("Failed to load coins:", error)
             setErrorLoadingCoins(true)
         } finally {
+            if (!isMobile) {
+                setSidebarCollapsed(false)
+            }
             setLoadingCoins(false)
         }
     }, [])
@@ -87,13 +90,6 @@ export const TickerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     })
                 }
 
-                if (message.type === "STREAM_CONNECTION_STATUS" && message.streamType === "ticker") {
-                    setConnectionStatus(message.status)
-                }
-
-                if (message.type === "STREAM_ERROR" && message.streamType === "ticker") {
-                    setConnectionStatus("disconnected")
-                }
             } catch (err) {
                 console.error("Failed to parse WebSocket message:", err)
             }
@@ -101,9 +97,13 @@ export const TickerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         socket.addEventListener("message", handleMessage)
         return () => {
+            const unsubscribeMessage = {
+                action: "UNSUBSCRIBE_TICKER",
+            }
+            sendMessage(unsubscribeMessage)
             socket.removeEventListener("message", handleMessage)
         }
-    }, [socket, loadingCoins, errorLoadingCoins])
+    }, [socket])
 
     const tickers = useMemo(() => Object.values(coinMap), [coinMap])
 
@@ -113,7 +113,6 @@ export const TickerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 tickers,
                 coinMap,
                 loadingCoins,
-                connectionStatus,
                 errorLoadingCoins,
                 sidebarCollapsed,
                 setSidebarCollapsed,

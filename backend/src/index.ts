@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { PORT, FRONTEND_URL } from "./config/env.js";
+import { PORT, FRONTEND_URL, NODE_ENV } from "./config/env.js";
 import candleRoute from "./routes/candleRoute.js";
 import coinRoute from "./routes/coinRoute.js";
 import { initializeWebSocketServer } from "./server.js";
@@ -10,7 +10,7 @@ const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: [FRONTEND_URL as string,],
+    origin: NODE_ENV === "development" ? true : [FRONTEND_URL as string,],
     credentials: true,
   }),
 );
@@ -18,8 +18,8 @@ app.use(
 app.use('/api/candles', candleRoute);
 app.use('/api/coins', coinRoute);
 
-const server = app.listen(PORT || 5000, () => {
-  console.log(`Server running on port ${PORT || 5000}`);
+const server = app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 initializeWebSocketServer(server);

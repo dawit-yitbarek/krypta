@@ -18,11 +18,20 @@ const MAX_RECONNECT_ATTEMPTS = 5
 
 export const BinanceSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [connectionState, setConnectionState] = useState<connectionStatus>("connecting")
+    const [disconnectFrom, setDisconnectFrom] = useState<"client" | "backend">("client")
 
     const socketRef = useRef<WebSocket | null>(null)
     const reconnectTimeoutRef = useRef<number>(null)
     const reconnectAttemptsRef = useRef<number>(0)
     const isReconnectingRef = useRef<boolean>(false)
+
+    const retryStream = () => {
+        const retryStreamMessage = {
+            action: "RETRY_STREAM"
+        }
+        setConnectionState("connecting")
+        sendMessage(retryStreamMessage)
+    }
 
     const connectSocket = useCallback(() => {
         setConnectionState("connecting")
@@ -57,11 +66,47 @@ export const BinanceSocketProvider: React.FC<{ children: React.ReactNode }> = ({
             reconnectAttemptsRef.current = 0
         }
 
+        socket.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data)
+                if (message.type === "STREAM_CONNECTION_STATUS") {
+                    setConnectionState(message.status)
+                    if (message.isError) {
+                        setDisconnectFrom("backend")
+                        toast({
+                            duration: 10000,
+                            variant: "destructive",
+                            title: (
+                                <div className="flex items-center gap-2 text-[#f43f5e]">
+                                    <AlertCircle size={14} />
+                                    <span>Connection to server dropped</span>
+                                </div>
+                            ),
+                            description: "The server couldn't connect to binance",
+                            action: (
+                                <ToastAction
+                                    aria-label="Reconnect Ticker Stream"
+                                    title="connect Ticker Stream"
+                                    altText="Reconnect Ticker Stream"
+                                    onClick={retryStream}
+                                >
+                                    <RefreshCw size={16} />
+                                </ToastAction >
+                            )
+                        })
+                    }
+                }
+            } catch (error) {
+                console.error(`Failed to parse incoming message: ${error}`)
+            }
+        }
+
         socket.onclose = (event) => {
             if (event.code === 1000) return
 
-            if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS || event.code === 1011) {
+            if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS || event.code === 1011) {
                 setConnectionState("disconnected")
+                setDisconnectFrom("client")
                 isReconnectingRef.current = false
                 toast({
                     duration: 10000,
@@ -69,10 +114,10 @@ export const BinanceSocketProvider: React.FC<{ children: React.ReactNode }> = ({
                     title: (
                         <div className="flex items-center gap-2 text-[#f43f5e]">
                             <AlertCircle size={14} />
-                            <span>Global Ticker Stream Disconnected</span>
+                            <span>Connection to server dropped</span>
                         </div>
                     ),
-                    description: "Unable to reconnect to ticker feed after multiple attempts.",
+                    description: "Unable to reconnect to server.",
                     action: (
                         <ToastAction
                             aria-label="Reconnect Ticker Stream"
@@ -98,13 +143,13 @@ export const BinanceSocketProvider: React.FC<{ children: React.ReactNode }> = ({
                     title: (
                         <div className="flex items-center gap-2 text-[#f59e0b]">
                             <WifiOff size={14} />
-                            <span>Ticker Stream Disconnected</span>
+                            <span>Server connection disconnected</span>
                         </div>
                     ),
                     description: (
                         <div className="flex items-center gap-1.5 mt-0.5 text-[#a1a1aa]">
                             <RefreshCw size={11} className="animate-spin text-[#f59e0b]" />
-                            <span>Reconnecting to global ticker feed...</span>
+                            <span>Reconnecting to server feed...</span>
                         </div>
                     )
                 })
@@ -122,7 +167,7 @@ export const BinanceSocketProvider: React.FC<{ children: React.ReactNode }> = ({
         }
 
         socket.onerror = (error) => {
-            console.error("Ticker WS Error:", error)
+            console.error("Backend WS Error:", error)
         }
     }, [])
 
@@ -145,17 +190,17 @@ export const BinanceSocketProvider: React.FC<{ children: React.ReactNode }> = ({
     const sendMessage = useCallback((data: unknown) => {
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
             socketRef.current.send(JSON.stringify(data))
-        } else {
-            console.warn("WebSocket is not connected. Message not sent:", data)
         }
     }, [])
+
+    const retryConnection = disconnectFrom === "backend" ? retryStream : connectSocket
 
     return (
         <BinanceSocketContext.Provider
             value={{
                 connectionState,
                 socket: socketRef.current,
-                retryConnection: connectSocket,
+                retryConnection,
                 sendMessage,
             }}
         >

@@ -1,16 +1,15 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react"
-import { CandleData, OrderBook, streamType, connectionStatus, TimeFrame, Trade } from "@/types"
+import React, { createContext, useContext, useState, useEffect, useRef } from "react"
+import { CandleData, OrderBook, connectionStatus, TimeFrame, Trade } from "@/types"
 import { api } from "@/lib/api"
 import { toUrlSymbol } from "@/lib/symbol"
 import { useBinanceSocket } from "@/context/BinanceSocketContext"
-import { secondsInDay } from "date-fns/constants"
 
 interface TradePairContextType {
     candles: CandleData[]
     orderBook: OrderBook
     recentTrades: Trade[]
     loadingCandles: boolean
-    streamsStatus: Partial<Record<streamType, connectionStatus>>
+    connectionState: connectionStatus
     timeframe: TimeFrame
     setTimeframe: (tf: TimeFrame) => void
     retryConnection: () => void
@@ -23,32 +22,54 @@ interface TradePairProviderProps {
     children: React.ReactNode
 }
 
-export const TradePairProvider: React.FC<TradePairProviderProps> = ({
-    symbol,
-    children,
-}) => {
+export const TradePairProvider: React.FC<TradePairProviderProps> = ({ symbol, children, }) => {
     const [timeframe, setTimeframe] = useState<TimeFrame>("1m")
     const [candles, setCandles] = useState<CandleData[]>([])
     const [orderBook, setOrderBook] = useState<OrderBook>({ bids: [], asks: [] })
     const [recentTrades, setRecentTrades] = useState<Trade[]>([])
     const [loadingCandles, setLoadingCandles] = useState<boolean>(true)
-    const [streamsStatus, setStreamsStatus] = useState<Partial<Record<streamType, connectionStatus>>>({
-        depth: "disconnected",
-        trades: "disconnected",
-        kline: "disconnected",
-        ticker: "disconnected",
-    })
 
-    const { socket, sendMessage } = useBinanceSocket()
+    const { socket, sendMessage, connectionState, retryConnection } = useBinanceSocket()
     const cleanSymbol = toUrlSymbol(symbol)
 
-    // Keep a mutable ref of timeframe to prevent stale closures in the WS listener
+    // Tracks current and previous timeframe values
     const timeframeRef = useRef(timeframe)
+    const prevTimeframe = useRef(timeframe)
+
     useEffect(() => {
         timeframeRef.current = timeframe
     }, [timeframe])
 
-    // 1. Historical Candle Fetching
+    // 1. ALL_PAIR_STREAM: Runs ONLY when cleanSymbol or socket changes
+    useEffect(() => {
+        if (!cleanSymbol || !socket) return
+
+        const pairDataMessage = {
+            action: "ALL_PAIR_STREAM",
+            symbol: cleanSymbol,
+            interval: timeframeRef.current,
+        }
+
+        sendMessage(pairDataMessage)
+    }, [cleanSymbol, socket, sendMessage])
+
+    // 2. CHANGE_TIMEFRAME: Runs ONLY when timeframe specifically changes value (skips initial mount & symbol changes)
+    useEffect(() => {
+        if (prevTimeframe.current !== timeframe) {
+            prevTimeframe.current = timeframe
+
+            if (cleanSymbol) {
+                const timeframeMessage = {
+                    action: "CHANGE_TIMEFRAME",
+                    symbol: cleanSymbol,
+                    interval: timeframe,
+                }
+                sendMessage(timeframeMessage)
+            }
+        }
+    }, [timeframe, cleanSymbol, sendMessage])
+
+    // 3. Historical REST Candle Fetching: Runs when symbol or timeframe changes
     useEffect(() => {
         let isSubscribed = true
 
@@ -56,21 +77,6 @@ export const TradePairProvider: React.FC<TradePairProviderProps> = ({
             if (!cleanSymbol) return
             setLoadingCandles(true)
             setCandles([])
-
-            const timeframeMessage = {
-                action: "CHANGE_TIMEFRAME",
-                symbol: cleanSymbol,
-                interval: timeframe,
-            }
-
-            const pairDataMessage = {
-                action: "ALL_PAIR_STREAM",
-                symbol: cleanSymbol,
-                interval: timeframe,
-            }
-
-            sendMessage(timeframeMessage)
-            sendMessage(pairDataMessage)
 
             try {
                 const data = await api.get(`/api/candles?symbol=${cleanSymbol}&interval=${timeframe}&limit=500`)
@@ -89,13 +95,11 @@ export const TradePairProvider: React.FC<TradePairProviderProps> = ({
         return () => {
             isSubscribed = false
         }
-    }, [cleanSymbol, timeframe, socket, sendMessage])
+    }, [cleanSymbol, timeframe])
 
-    // 2. WebSocket Event Listener
+    // 4. WebSocket Event Listener & Cleanup
     useEffect(() => {
         if (!cleanSymbol || !socket) return
-
-        setStreamsStatus({ depth: "connecting", trades: "connecting", kline: "connecting", ticker: "connecting" })
 
         const handleMessage = (event: MessageEvent) => {
             try {
@@ -126,15 +130,6 @@ export const TradePairProvider: React.FC<TradePairProviderProps> = ({
                     })
                 }
 
-                if (msg.type === "STREAM_CONNECTION_STATUS") {
-                    if (msg.streamType === "ticker" || msg.streamType === "unknown") return
-                    setStreamsStatus((prev) => ({ ...prev, [msg.streamType]: msg.status }))
-                }
-
-                if (msg.type === "STREAM_ERROR") {
-                    if (msg.streamType === "ticker" || msg.streamType === "unknown") return
-                    setStreamsStatus((prev) => ({ ...prev, [msg.streamType]: "disconnected" }))
-                }
             } catch (e) {
                 console.error("Pair WS Parse Error:", e)
             }
@@ -146,12 +141,12 @@ export const TradePairProvider: React.FC<TradePairProviderProps> = ({
             const unsubscribeMessage = {
                 action: "UNSUBSCRIBE_PAIR",
                 symbol: cleanSymbol,
-                interval: timeframe,
+                interval: timeframeRef.current,
             }
             sendMessage(unsubscribeMessage)
             socket.removeEventListener("message", handleMessage)
         }
-    }, [cleanSymbol, socket])
+    }, [cleanSymbol, socket, sendMessage])
 
     // Reset state on pair switch
     useEffect(() => {
@@ -159,9 +154,6 @@ export const TradePairProvider: React.FC<TradePairProviderProps> = ({
         setRecentTrades([])
     }, [symbol])
 
-    const retryConnection = useCallback(() => {
-        // Retry logic if needed
-    }, [])
 
     return (
         <TradePairContext.Provider
@@ -170,7 +162,7 @@ export const TradePairProvider: React.FC<TradePairProviderProps> = ({
                 orderBook,
                 recentTrades,
                 loadingCandles,
-                streamsStatus,
+                connectionState,
                 timeframe,
                 setTimeframe,
                 retryConnection,

@@ -1,262 +1,295 @@
 import WebSocket from 'ws';
 import { streamType } from './types/index.js';
 
-interface Subscriber {
-    streamKey: string;
-    streamType: streamType
-    clientId: string;
-    clientWs: WebSocket;
+
+interface StreamMetadata {
+    streamType: streamType;
     onMessageTransform?: (data: any) => any;
 }
 
+export interface SubscribePayload {
+    clientId: string;
+    clientWs: WebSocket;
+    streams: Record<string, StreamMetadata>;
+}
+
 class BinanceStreamManager {
-    private activeStreams: Map<string, WebSocket> = new Map();
+    // Active subscriber map: streamKey -> Map<clientId, SubscriberConfig>
     private streamSubscribers: Map<string, Map<string, WebSocket>> = new Map();
 
-    // Track streams per client for automatic bulk cleanup
+    // Map streamKey -> StreamMetadata Stored once per stream
+    private streamMeta: Map<string, StreamMetadata> = new Map();
+
+    // Client lookup map: clientId -> Set<streamKey>
     private clientSubscriptions: Map<string, Set<string>> = new Map();
 
-    // Track retry counts per stream
-    private retryCounts: Map<string, number> = new Map();
+    // Single combined Binance connection & heartbeat tracking
+    private binanceWs: WebSocket | null = null;
+    private isConnected: boolean = false;
+    private isAlive: boolean = true;
+    private pingInterval: NodeJS.Timeout | null = null;
 
-    // Track active retry timers
-    private retryTimers: Map<string, NodeJS.Timeout> = new Map();
+    // Retry management
+    private retryTimer: NodeJS.Timeout | null = null;
+    private retryCount: number = 0;
     private readonly MAX_RETRIES = 5;
 
-    public subscribe({ streamKey, streamType, clientId, clientWs, onMessageTransform }: Subscriber) {
-        // Track client
-        if (!this.clientSubscriptions.has(clientId)) {
-            this.clientSubscriptions.set(clientId, new Set());
-        }
-        this.clientSubscriptions.get(clientId)!.add(streamKey);
-
-        // Track stream
-        if (!this.streamSubscribers.has(streamKey)) {
-            this.streamSubscribers.set(streamKey, new Map());
-        }
-        this.streamSubscribers.get(streamKey)!.set(clientId, clientWs);
-
-        // If a retry was scheduled for this stream, cancel it
-        if (this.retryTimers.has(streamKey)) {
-            clearTimeout(this.retryTimers.get(streamKey)!);
-            this.retryTimers.delete(streamKey);
-        }
-
-        // Create upstream Binance connection if it doesn't exist
-        if (!this.activeStreams.has(streamKey)) {
-            this.connectToBinance(streamKey, streamType, onMessageTransform);
-        } else {
-            const payload = {
-                type: 'STREAM_CONNECTION_STATUS',
-                status: "connected",
-                streamType: streamType,
-                streamKey: streamKey,
+    public subscribeBatch({ clientId, clientWs, streams }: SubscribePayload) {
+        const newStreamKeys: string[] = []
+        Object.entries(streams).forEach(([streamKey, config]) => {
+            // 1. Track client's active streams
+            if (!this.clientSubscriptions.has(clientId)) {
+                this.clientSubscriptions.set(clientId, new Set());
             }
-            this.sendMessage(clientWs, payload)
+            this.clientSubscriptions.get(clientId)!.add(streamKey);
+
+            // 2. Track stream metadata (only once per stream key)
+            if (!this.streamMeta.has(streamKey)) {
+                this.streamMeta.set(streamKey, { streamType: config.streamType, onMessageTransform: config.onMessageTransform });
+            }
+
+            // 3. Track stream subscribers
+            if (!this.streamSubscribers.has(streamKey)) {
+                this.streamSubscribers.set(streamKey, new Map());
+                newStreamKeys.push(streamKey)
+            }
+            this.streamSubscribers.get(streamKey)!.set(clientId, clientWs);
+
+        })
+
+        // 4. Ensure the single combined connection is 
+        this.ensureBinanceConnection(() => {
+            // Callback executes when socket is OPEN
+            if (newStreamKeys.length > 0) {
+                this.sendBinanceCommand('SUBSCRIBE', newStreamKeys);
+            }
+        });
+
+        // notify client the connection status
+        const payload = {
+            type: 'STREAM_CONNECTION_STATUS',
+            status: "connected"
+        };
+        if (this.isConnected) {
+            this.sendMessage(clientWs, payload);
         }
     }
 
-    private connectToBinance(streamKey: string, streamType: streamType, onMessageTransform?: (data: any) => any) {
-        if (this.retryTimers.has(streamKey)) {
-            clearTimeout(this.retryTimers.get(streamKey)!);
-            this.retryTimers.delete(streamKey);
+    private ensureBinanceConnection(onOpen?: () => void) {
+        if (this.binanceWs && this.binanceWs.readyState === WebSocket.OPEN) {
+            if (onOpen) onOpen();
+            return;
         }
 
-        // console.log(`[StreamManager] Opening new Binance upstream: ${streamKey}`);
-        const binanceWs = new WebSocket(`wss://stream.binance.com:9443/ws/${streamKey}`);
+        if (this.binanceWs && this.binanceWs.readyState === WebSocket.CONNECTING) {
+            return;
+        }
 
-        let isAlive: boolean = true;
-        let pingInterval: NodeJS.Timeout;
+        this.binanceWs = new WebSocket('wss://stream.binance.com:9443/stream');
 
-        binanceWs.on('open', () => {
-            console.log(`[StreamManager] Binance stream connected: ${streamKey} type: ${streamType}`);
-            const payload = {
-                type: 'STREAM_CONNECTION_STATUS',
-                status: "connected",
-                streamType: streamType,
-                streamKey: streamKey,
+        this.binanceWs.on('open', () => {
+            this.isConnected = true;
+            this.retryCount = 0;
+            this.startHeartbeat();
+
+            // Re-subscribe to all active streams upon connect/reconnect
+            const activeStreams = Array.from(this.streamSubscribers.keys());
+            if (activeStreams.length > 0) {
+                this.sendBinanceCommand('SUBSCRIBE', activeStreams);
             }
 
-            this.broadcast(streamKey, payload)
-
-            this.retryCounts.set(streamKey, 0);
-
-            isAlive = true;
-            pingInterval = setInterval(() => {
-                if (isAlive === false) {
-                    console.warn(`[StreamManager] Heartbeat timed out for ${streamKey}. Terminating.`);
-                    clearInterval(pingInterval);
-                    return binanceWs.terminate();
-                }
-
-                isAlive = false;
-                binanceWs.ping();
-            }, 30000);
+            // Notify clients of stream status
+            this.notifyClientsConnectionStatus("connected");
         });
 
-        binanceWs.on('pong', () => {
-            isAlive = true;
+        this.binanceWs.on('pong', () => {
+            this.isAlive = true;
         });
 
-        binanceWs.on('message', (rawData) => {
+        this.binanceWs.on('message', (rawData) => {
             try {
                 const parsed = JSON.parse(rawData.toString());
-                const payload = onMessageTransform ? onMessageTransform(parsed) : parsed;
-                this.broadcast(streamKey, payload);
-            } catch (err) {
-                console.error(`Error processing stream ${streamKey}:`, err);
+
+                if (!parsed.stream || !parsed.data) {
+                    return
+                };
+
+                const streamKey = parsed.stream;
+                const innerData = parsed.data;
+
+                this.broadcast(streamKey, innerData);
+            } catch (err: any) {
+                console.error('[StreamManager] Error parsing combined payload:', err.message || err);
             }
         });
 
-        binanceWs.on('error', (err) => {
-            // console.error(`Binance Stream Error [${streamKey}]: ${err.message}`);
+        this.binanceWs.on('error', (err) => {
+            console.error('[StreamManager] Binance Stream Error:', err.message || err);
         });
 
-        binanceWs.on('close', () => {
-            this.activeStreams.delete(streamKey);
-            clearInterval(pingInterval);
+        this.binanceWs.on('close', () => {
+            this.isConnected = false;
+            this.stopHeartbeat();
+            this.handleReconnect();
+        });
+    }
 
+    private handleReconnect() {
+        if (this.streamSubscribers.size === 0) {
+            return;
+        }
+
+        this.retryCount++;
+        if (this.retryCount <= this.MAX_RETRIES) {
+            const delay = Math.pow(2, this.retryCount) * 1000;
+
+            this.retryTimer = setTimeout(() => {
+                this.ensureBinanceConnection();
+            }, delay);
+        } else {
+            this.notifyClientsConnectionStatus("disconnected", true);
+        }
+    }
+
+    private notifyClientsConnectionStatus(status: 'connected' | 'disconnected', isError?: boolean) {
+        const uniqueClients = new Set<WebSocket>();
+
+        // Collect all unique client sockets across all streams
+        this.streamSubscribers.forEach((subscribers) => {
+            subscribers.forEach((clientWs) => {
+                uniqueClients.add(clientWs);
+            });
+        });
+
+        const payload = {
+            type: 'STREAM_CONNECTION_STATUS',
+            status: status,
+            isError
+        };
+
+        uniqueClients.forEach((clientWs) => {
+            this.sendMessage(clientWs, payload);
+        });
+    }
+
+    public unsubscribeBatch(streamKeys: string[], clientId: string) {
+        const binanceStreamsToUnsubscribe: string[] = [];
+
+        streamKeys.forEach((streamKey) => {
             const subscribers = this.streamSubscribers.get(streamKey);
+            if (subscribers) {
+                subscribers.delete(clientId);
 
-            // If there are not any clients in this stream, abort cleanup
-            if (!subscribers || subscribers.size === 0) {
-                this.streamSubscribers.delete(streamKey);
-                this.retryCounts.delete(streamKey);
-                this.retryTimers.delete(streamKey);
-                return;
+                // If no subscribers remain for this key add it
+                if (subscribers.size === 0) {
+                    binanceStreamsToUnsubscribe.push(streamKey);
+                    this.streamSubscribers.delete(streamKey);
+                    this.streamMeta.delete(streamKey);
+                }
             }
 
-            // Increment retry attempt
-            const currentAttempts = (this.retryCounts.get(streamKey) || 0) + 1;
-            this.retryCounts.set(streamKey, currentAttempts);
-
-            if (currentAttempts <= this.MAX_RETRIES) {
-                // Exponential Backoff
-                const delay = Math.pow(2, currentAttempts) * 1000;
-
-                const timer = setTimeout(() => {
-                    this.retryTimers.delete(streamKey);
-
-                    if (!this.activeStreams.has(streamKey)) {
-                        this.connectToBinance(streamKey, streamType, onMessageTransform);
-                    }
-                }, delay);
-                this.retryTimers.set(streamKey, timer);
-            } else {
-                console.error(`[StreamManager] Max retries reached for ${streamKey}. Closing client connections.`);
-                let errorMessage = `Market feed '${streamType}' is unavailable.`;
-
-                switch (streamType) {
-                    case 'depth':
-                        errorMessage = "Failed to connect to the order book feed.";
-                        break;
-                    case 'trades':
-                        errorMessage = "Failed to connect to the trades feed.";
-                        break;
-                    case 'kline':
-                        errorMessage = "Failed to connect to the candles feed.";
-                        break;
-                    case 'ticker':
-                        errorMessage = "Failed to connect to the ticker feed.";
-                        break;
+            // Clean up client lookup
+            const clientStreams = this.clientSubscriptions.get(clientId);
+            if (clientStreams) {
+                clientStreams.delete(streamKey);
+                if (clientStreams.size === 0) {
+                    this.clientSubscriptions.delete(clientId);
                 }
-
-                const payload = {
-                    type: 'STREAM_ERROR',
-                    streamType: streamType,
-                    streamKey: streamKey,
-                    errorMessage: errorMessage
-                }
-
-                this.broadcast(streamKey, payload)
-
-                this.streamSubscribers.delete(streamKey);
-                this.retryCounts.delete(streamKey);
             }
         });
 
-        this.activeStreams.set(streamKey, binanceWs);
-    }
-
-    public unsubscribe(streamKey: string, clientId: string) {
-        const subscribers = this.streamSubscribers.get(streamKey);
-        if (subscribers) {
-            subscribers.delete(clientId);
-
-            if (subscribers.size === 0) {
-                console.log(`[StreamManager] No subscribers for ${streamKey}. Closing Binance stream.`);
-                const upstream = this.activeStreams.get(streamKey);
-                if (upstream) {
-                    upstream.close();
-                    this.activeStreams.delete(streamKey);
-                }
-                if (this.retryTimers.has(streamKey)) {
-                    clearTimeout(this.retryTimers.get(streamKey)!);
-                    this.retryTimers.delete(streamKey);
-                }
-                this.streamSubscribers.delete(streamKey);
-            }
+        // Send one batched UNSUBSCRIBE command to Binance for all removed streams
+        if (binanceStreamsToUnsubscribe.length > 0) {
+            this.sendBinanceCommand('UNSUBSCRIBE', binanceStreamsToUnsubscribe);
         }
 
-        // Clean up client record
-        const clientStreams = this.clientSubscriptions.get(clientId);
-        if (clientStreams) {
-            clientStreams.delete(streamKey);
-            if (clientStreams.size === 0) {
-                this.clientSubscriptions.delete(clientId);
+        // Close connection if total subscriptions drop to 0
+        if (this.streamSubscribers.size === 0 && this.binanceWs) {
+            if (this.retryTimer) {
+                clearTimeout(this.retryTimer);
+                this.retryTimer = null;
             }
+            this.binanceWs.close();
+            this.binanceWs = null;
         }
     }
 
-    // Clean up all subscriptions for a client at once on disconnect
     public disconnectClient(clientId: string) {
         const clientStreams = this.clientSubscriptions.get(clientId);
         if (!clientStreams) return;
 
-        // Clone set to avoid mutation during iteration
         const streams = Array.from(clientStreams);
-        streams.forEach((streamKey) => {
-            this.unsubscribe(streamKey, clientId);
-        });
+        this.unsubscribeBatch(streams, clientId)
     }
 
-    private broadcast(streamKey: string, message: any) {
-        const subscribers = this.streamSubscribers.get(streamKey);
-        if (!subscribers) return;
+    private sendBinanceCommand(method: 'SUBSCRIBE' | 'UNSUBSCRIBE', streams: string[]) {
+        if (this.binanceWs && this.binanceWs.readyState === WebSocket.OPEN) {
+            this.binanceWs.send(
+                JSON.stringify({
+                    method,
+                    params: streams,
+                    id: Date.now(),
+                })
+            );
+        }
+    }
 
-        const data = JSON.stringify(message);
+    private broadcast(streamKey: string, rawData: any) {
+        const subscribers = this.streamSubscribers.get(streamKey);
+        if (!subscribers || subscribers.size === 0) return;
+        const meta = this.streamMeta.get(streamKey)
+        const payload = meta?.onMessageTransform ? meta.onMessageTransform(rawData) : rawData
 
         subscribers.forEach((clientWs) => {
-            if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(data);
-            }
+            this.sendMessage(clientWs, payload);
         });
     }
 
     private sendMessage(clientWs: WebSocket, message: any) {
-        const data = JSON.stringify(message);
-
         if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(data);
+            clientWs.send(JSON.stringify(message));
+        }
+    }
+
+    private startHeartbeat() {
+        this.stopHeartbeat();
+        this.isAlive = true;
+        this.pingInterval = setInterval(() => {
+            if (!this.isAlive) {
+                this.binanceWs?.terminate();
+                return;
+            }
+            this.isAlive = false;
+            this.binanceWs?.ping();
+        }, 30000);
+    }
+
+    private stopHeartbeat() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
         }
     }
 
     public clearData() {
-        // Clear pending reconnect timers
-        this.retryTimers.forEach((timer) => clearTimeout(timer));
-        this.retryTimers.clear();
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
 
-        // Close upstream sockets
-        this.activeStreams.forEach((ws) => ws.close());
-        this.activeStreams.clear();
+        this.stopHeartbeat();
+
+        if (this.binanceWs) {
+            this.binanceWs.close();
+            this.binanceWs = null;
+        }
 
         this.streamSubscribers.clear();
+        this.streamMeta.clear();
         this.clientSubscriptions.clear();
-        this.retryCounts.clear();
-        console.log("Data Cleared")
+        this.retryCount = 0;
+        this.isConnected = false;
     }
 }
 
 export const streamManager = new BinanceStreamManager();
-
-// streamManager.clearData();

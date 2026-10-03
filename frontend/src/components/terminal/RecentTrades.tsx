@@ -42,7 +42,7 @@ export function RecentTrades() {
       </div>
 
       {/* Column headers */}
-      <div className="flex items-center justify-center gap-8 text-[10px] text-[#52525b] font-mono py-0.5 px-4 bg-[#18181b]">
+      <div className="flex items-center justify-between gap-8 text-[10px] text-[#52525b] font-mono py-0.5 px-4 bg-[#18181b]">
         <span>Price</span>
         <span className="text-right">Size</span>
         <span className="text-right">Time</span>

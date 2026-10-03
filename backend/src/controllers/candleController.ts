@@ -17,7 +17,7 @@ export const fetchCandleDataHistory = async (req: Request, res: Response) => {
             });
         }
 
-        // Transform the raw Binance array into readable objects for your chart
+        // Transform the raw Binance array into readable objects for the chart
         const formattedCandles = rawData.map((c: any) => ({
             time: Math.floor(c[0] / 1000), // Convert ms to seconds for charting libraries
             open: parseFloat(c[1]),

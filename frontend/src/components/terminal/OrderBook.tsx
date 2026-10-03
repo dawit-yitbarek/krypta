@@ -97,7 +97,7 @@ export function OrderBook({ activePair, activeTicker }: OrderBookProps) {
 
       {/* Side-by-Side Tables */}
       <div className="flex-1 flex min-h-0 divide-x divide-[#27272a]">
-        {/* Bids (Buy Orders) - Left */}
+        {/* Bids (Buy Orders) */}
         <div className="flex-1 flex flex-col min-w-0">
           <div className="px-2 py-0.5 bg-[#10b981]/10 text-[#10b981] text-[10px] font-bold uppercase tracking-wider border-b border-[#27272a]">
             Bids (Buy)
@@ -105,7 +105,7 @@ export function OrderBook({ activePair, activeTicker }: OrderBookProps) {
           <OrderTable entries={orderBook.bids} side="bid" maxTotal={maxTotal} />
         </div>
 
-        {/* Asks (Sell Orders) - Right */}
+        {/* Asks (Sell Orders) */}
         <div className="flex-1 flex flex-col min-w-0">
           <div className="px-2 py-0.5 bg-[#f43f5e]/10 text-[#f43f5e] text-[10px] font-bold uppercase tracking-wider border-b border-[#27272a]">
             Asks (Sell)

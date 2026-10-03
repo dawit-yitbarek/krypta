@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { streamType } from './types/index.js';
+import logger from './config/logger.js';
 
 
 interface StreamMetadata {
@@ -119,12 +120,12 @@ class BinanceStreamManager {
 
                 this.broadcast(streamKey, innerData);
             } catch (err: any) {
-                console.error('[StreamManager] Error parsing combined payload:', err.message || err);
+                logger.error(`[StreamManager] Error parsing combined payload: ${err.message || err}`);
             }
         });
 
         this.binanceWs.on('error', (err) => {
-            console.error('[StreamManager] Binance Stream Error:', err.message || err);
+            logger.error(`[StreamManager] Binance Stream Error: ${err.message || err}`);
         });
 
         this.binanceWs.on('close', () => {

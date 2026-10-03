@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import logger from '../config/logger.js';
 
 export const getTopMarketCapCoins = async (req: Request, res: Response) => {
     const { limit = 100 } = req.query;
@@ -32,7 +33,7 @@ export const getTopMarketCapCoins = async (req: Request, res: Response) => {
 
         res.json(tradableCoins);
     } catch (error: any) {
-        console.error("Failed to fetch coins list:", error.message || error);
+        logger.error(`Failed to fetch coins list: ${error.message || error}`);
         res.status(500).json({ error: "Failed to fetch coins list" });
     }
 };

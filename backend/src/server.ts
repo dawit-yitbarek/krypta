@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { SubscribePayload } from './types/index.js';
 import { streamManager } from './binanceStreamManager.js';
 import { Server } from 'http';
+import logger from './config/logger.js';
 
 const transformFunctions = {
     ticker: (tickerArray: any) => ({
@@ -171,7 +172,7 @@ export const initializeWebSocketServer = (server: Server) => {
                     streamManager.unsubscribeBatch([tickerStream], clientId);
                 }
             } catch (err: any) {
-                console.error("Client message error:", err.message || err);
+                logger.error(`Client message error: ${err.message || err}`);
             }
         });
 

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import logger from '../config/logger.js';
 
 export const fetchCandleDataHistory = async (req: Request, res: Response) => {
     const { symbol = 'BTCUSDT', interval = '1m', limit = '700' } = req.query;
@@ -11,7 +12,7 @@ export const fetchCandleDataHistory = async (req: Request, res: Response) => {
 
         // Handle non-200 responses from Binance
         if (!response.ok || !Array.isArray(rawData)) {
-            console.warn(`Binance API error for symbol ${symbol}:`, rawData);
+            logger.warn(`Binance API error for symbol ${symbol}: ${rawData?.msg || 'Unknown error'}`);
             return res.status(response.status >= 400 && response.status < 500 ? response.status : 400).json({
                 error: rawData?.msg || "Invalid symbol or request parameters",
             });
@@ -29,7 +30,7 @@ export const fetchCandleDataHistory = async (req: Request, res: Response) => {
 
         res.json(formattedCandles);
     } catch (error: any) {
-        console.error("Failed to fetch historical candles:", error.message || error);
+        logger.error(`Failed to fetch historical candles: ${error.message || error}`);
         res.status(500).json({ error: "Failed to fetch historical data" });
     }
 };
